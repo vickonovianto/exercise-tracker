@@ -54,6 +54,19 @@ app.post('/api/users', (req, res) => {
   })
 }) 
 
+// return array of user object
+app.get('/api/users', (req, res) => {
+  User.find().exec((err, users) => { // fetch all users
+    if (err) {
+      res.json(err.message)
+    } else {
+      // for every object that is fetched, change with a new object that only includes necessary attributes to be returned
+      const formattedUsers = users.map( user => { return { username: user.username, _id: user.id } })
+      res.json(formattedUsers)
+    }
+  })
+})
+
 
 
 const listener = app.listen(process.env.PORT || 3000, () => {
