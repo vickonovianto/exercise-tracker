@@ -133,6 +133,31 @@ app.post('/api/users/:_id/exercises', (req, res) => {
   })
 }) 
 
+// get list of exercises of certain user along with the total number of exercises
+app.get('/api/users/:_id/logs', (req, res) => {
+  const _id = req.params._id // get id from request param
+  User.findById(_id, (err, user) => { // get user from the id supplied
+    if (err) {
+      res.json({error: err.message })
+    } else {
+      const userObjectWithCount = user.toObject({ virtuals: true }) 
+      const formattedExercises = userObjectWithCount.log.map((exercise) => { 
+        return {
+          description: exercise.description,
+          duration: exercise.duration,
+          date: exercise.date
+        } 
+      })
+      res.json({
+        username: userObjectWithCount.username,
+        count: userObjectWithCount.count,
+        _id: userObjectWithCount.id,
+        log: formattedExercises
+      })
+    }
+  })
+})
+
 
 
 const listener = app.listen(process.env.PORT || 3000, () => {
