@@ -4,6 +4,7 @@ const cors = require('cors')
 const bodyParser = require('body-parser')
 const mongoose = require('mongoose')
 const { Schema } = mongoose
+const ObjectId = mongoose.Types.ObjectId
 require('dotenv').config()
 
 main().catch(err => console.log(err))
@@ -99,7 +100,7 @@ app.post('/api/users/:_id/exercises', (req, res) => {
   const _id = req.params._id // get _id from request params
   const description = req.body.description.trim() // get username and trim space from start and end from request body
   const duration = req.body.duration // get duration from request body
-  const dateString = req.body.date.trim() // get date string and trim space from start and end from request body
+  const dateString = req.body.date // get date string from request body
   const exerciseObject = { description: description, duration: duration } // create a temporary object to contain required attributes
   if (isValidDate(dateString)) {
     exerciseObject.date = new Date(dateString) // add the date field to the temporary object
@@ -136,26 +137,84 @@ app.post('/api/users/:_id/exercises', (req, res) => {
 // get list of exercises of certain user along with the total number of exercises
 app.get('/api/users/:_id/logs', (req, res) => {
   const _id = req.params._id // get id from request param
-  User.findById(_id, (err, user) => { // get user from the id supplied
-    if (err) {
-      res.json({error: err.message })
-    } else {
-      const userObjectWithCount = user.toObject({ virtuals: true }) 
-      const formattedExercises = userObjectWithCount.log.map((exercise) => { 
-        return {
-          description: exercise.description,
-          duration: exercise.duration,
-          date: exercise.date
-        } 
-      })
-      res.json({
-        username: userObjectWithCount.username,
-        count: userObjectWithCount.count,
-        _id: userObjectWithCount.id,
-        log: formattedExercises
-      })
+  if (ObjectId.isValid(_id)) { // check if _id is valid or not so it can be used in the query
+    const aggregatePipeline = [] // initalize empty aggregation pipeline
+    aggregatePipeline.push({ $match: { _id: ObjectId(_id) } }) // insert the first pipeline which will get user which has a certain _id
+    if (Object.keys(req.query).length > 0) { // check if there is query param
+      const startDate = (req.query.from && isValidDate(req.query.from)) ? new Date(req.query.from) : null // check and assign starting date param
+      const endDate = (req.query.to && isValidDate(req.query.to)) ? new Date(req.query.to) : null // check and assign ending date param
+      const limit = (req.query.limit && !Number.isNaN(+req.query.limit) && +req.query.limit > 0) ? +req.query.limit : null // check and assign limit param
+      if (startDate !== null || endDate !== null || limit !== null) { // if there is minimum 1 valid query param, then add the next aggregation pipeline
+        const projectAggregate = { 
+          $project: {  // project fields of the model
+            username: "$username", // insert the username field so it can appear in the final result
+            log: { // modify the log field which contains data of exercises
+              $slice: [ // first slice the log field
+                {
+                  $filter: { // before sliced, the log field must be filtered first 
+                    input: "$log", // specify the array that will be filtered 
+                    as: "exercise", // save each log element in variable named "exercise"
+                    cond: { // the condition to determine which log element will be outputted to next pipeline
+                      $and: [] // $and contains array which every element of array has to produce output "true" 
+                    }
+                  }
+                }
+              ]
+            }
+          } 
+        }
+        if (startDate !== null) { // if the starting date param is valid
+          // add "the date field of each log element(each element accessed via $$exercise) must be greater or equal than startDate" to the condition of the filter
+          projectAggregate.$project.log.$slice[0].$filter.cond.$and.push({ $gte: [ "$$exercise.date", startDate ] })
+        } else {
+          // if no starting date param is supplied, then add always true condition to the filter 
+          projectAggregate.$project.log.$slice[0].$filter.cond.$and.push({ $literal: true })
+        }
+        if (endDate !== null) { // if the ending date param is valid
+          // add "the date field of each log element(each element accessed via $$exercise) must be less or equal than endDate" to the condition of the filter
+          projectAggregate.$project.log.$slice[0].$filter.cond.$and.push({ $lte: [ "$$exercise.date", endDate ] })
+        } else {
+          // if no ending date param is supplied, then add always true condition to the filter 
+          projectAggregate.$project.log.$slice[0].$filter.cond.$and.push({ $literal: true })
+        }
+        if (limit !== null) { // if the limit param is valid
+          // add how many numbers of elements to be sliced
+          projectAggregate.$project.log.$slice.push({ $literal: limit })
+        } else {
+          // add how many numbers of elements to be sliced, in this case it will be the same as the size of the array
+          projectAggregate.$project.log.$slice.push({ $size: "$log" })
+        }
+        aggregatePipeline.push(projectAggregate) // add to the pipeline
+      }
     }
-  })
+    let aggregate = User.aggregate(aggregatePipeline) // create an Aggregate object
+    aggregate.exec((err, users) => { // execute the aggregation pipeline
+      if (err) {
+        res.json({error: err.message })
+      } else {
+        if (users.length === 1) { // the results always contain one element because already selected by user id
+          const user = users[0] // get the user object
+          const formattedExercises = user.log.map((exercise) => {  // create new format of the log array
+            return {
+              description: exercise.description,
+              duration: exercise.duration,
+              date: exercise.date.toDateString() // format the date field
+            } 
+          })
+          res.json({ // return the result
+            username: user.username,
+            count: user.log.length,
+            _id: user._id,
+            log: formattedExercises // use the new formatted log array
+          })
+        } else { // if the results are empty, it means there is no user that has the specified _id
+          res.json({ error: 'User with the specified id not found' })
+        }
+      }
+    })
+  } else {
+    res.json({ error: 'Invalid ID' })
+  }
 })
 
 
